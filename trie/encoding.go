@@ -34,9 +34,10 @@ package trie
 // in the case of an odd number. All remaining nibbles (now an even number) fit properly
 // into the remaining bytes. Compact encoding is used for nodes stored on disk.
 
+//Hex编码转为Cmpact编码（16进制前缀编码）
 func hexToCompact(hex []byte) []byte {
 	terminator := byte(0)
-	if hasTerm(hex) {
+	if hasTerm(hex) {   //检查是否有结尾为0x10 => 16
 		terminator = 1
 		hex = hex[:len(hex)-1]
 	}
@@ -50,7 +51,7 @@ func hexToCompact(hex []byte) []byte {
 	decodeNibbles(hex, buf[1:])
 	return buf
 }
-
+//compact编码转化为Hex编码
 func compactToHex(compact []byte) []byte {
 	if len(compact) == 0 {
 		return compact
@@ -65,6 +66,7 @@ func compactToHex(compact []byte) []byte {
 	return base[chop:]
 }
 
+//HEX编码 作用是将 key的byte串按照半字节为一个单位转为hex串
 func keybytesToHex(str []byte) []byte {
 	l := len(str)*2 + 1
 	var nibbles = make([]byte, l)
@@ -72,12 +74,16 @@ func keybytesToHex(str []byte) []byte {
 		nibbles[i*2] = b / 16
 		nibbles[i*2+1] = b % 16
 	}
+	//末尾加入Hex标志位16
 	nibbles[l-1] = 16
 	return nibbles
 }
 
 // hexToKeybytes turns hex nibbles into key bytes.
 // This can only be used for keys of even length.
+
+// 将十六进制的bibbles转成key bytes，这只能用于偶数长度的key
+//这和上面方法时互逆的过程
 func hexToKeybytes(hex []byte) []byte {
 	if hasTerm(hex) {
 		hex = hex[:len(hex)-1]
@@ -97,6 +103,7 @@ func decodeNibbles(nibbles []byte, bytes []byte) {
 }
 
 // prefixLen returns the length of the common prefix of a and b.
+// 返回a和b的公共前缀的长度
 func prefixLen(a, b []byte) int {
 	var i, length = 0, len(a)
 	if len(b) < length {
@@ -111,6 +118,7 @@ func prefixLen(a, b []byte) int {
 }
 
 // hasTerm returns whether a hex key has the terminator flag.
+// 十六进制key是否有结束标志符
 func hasTerm(s []byte) bool {
 	return len(s) > 0 && s[len(s)-1] == 16
 }
