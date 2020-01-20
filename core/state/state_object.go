@@ -63,10 +63,11 @@ func (s Storage) Copy() Storage {
 // Account values can be accessed and modified through the object.
 // Finally, call CommitTrie to write the modified storage trie into a database.
 type stateObject struct {
-	address  common.Address
+	address  common.Address   ////对应的账户地址
+	// 账户地址的哈希值
 	addrHash common.Hash // hash of ethereum address of the account
-	data     Account
-	db       *StateDB
+	data     Account //账户属性
+	db       *StateDB //底层数据库
 
 	// DB error.
 	// State objects are used by the consensus core and VM which are
@@ -76,11 +77,13 @@ type stateObject struct {
 	dbErr error
 
 	// Write caches.
+	// 存储树，第一次访问时初始化
 	trie Trie // storage trie, which becomes non-nil on first access
 	code Code // contract bytecode, which gets set when code is loaded
 
 	originStorage  Storage // Storage cache of original entries to dedup rewrites, reset for every transaction
 	pendingStorage Storage // Storage entries that need to be flushed to disk, at the end of an entire block
+	//当前事务执行中已修改的存储条目
 	dirtyStorage   Storage // Storage entries that have been modified in the current transaction execution
 	fakeStorage    Storage // Fake storage which constructed by caller for debugging purpose.
 
@@ -155,18 +158,25 @@ func (s *stateObject) touch() {
 	}
 }
 
+
+//所以每次读写前均需要getTrie。 该方法是，保证树的懒加载。
+//只有在第一次使用时，才加载树。这棵树和顶层的世界状态树结构完全，只是存储的内容不同而已。
+//利用此合约地址和存储树 root 加载树，加载不一定成功①。比如像一个不存在的合约读取存储数据，
+//因此在加载失败时，将使用空 root 来初始化出一颗空树，保证在 stateObject 中，trie 不会为nil②。
 func (s *stateObject) getTrie(db Database) Trie {
 	if s.trie == nil {
 		var err error
-		s.trie, err = db.OpenStorageTrie(s.addrHash, s.data.Root)
+		//
+		s.trie, err = db.OpenStorageTrie(s.addrHash, s.data.Root) //①
 		if err != nil {
-			s.trie, _ = db.OpenStorageTrie(s.addrHash, common.Hash{})
+			s.trie, _ = db.OpenStorageTrie(s.addrHash, common.Hash{}) //②
 			s.setError(fmt.Errorf("can't create storage trie: %v", err))
 		}
 	}
 	return s.trie
 }
 
+//
 // GetState retrieves a value from the account storage trie.
 func (s *stateObject) GetState(db Database, key common.Hash) common.Hash {
 	// If the fake storage is set, only lookup the state here(in the debugging mode)
@@ -174,10 +184,14 @@ func (s *stateObject) GetState(db Database, key common.Hash) common.Hash {
 		return s.fakeStorage[key]
 	}
 	// If we have a dirty value for this state entry, return it
+	//将检查是否内存中维护的数据草稿集 dirtyStorage 中是否存在
 	value, dirty := s.dirtyStorage[key]
 	if dirty {
 		return value
 	}
+	//使用草稿的原因是，所有对 State 的修改，并不是直接修改底层数据库。
+	//而是，暂时记录在内存中，只要在最终需要提交到数据库时，才从尝试 tryUpdate。
+	//如果草稿中不存在，则从树中读取数据， 为了避免重复从树中读取，提高效率。
 	// Otherwise return the entry's original value
 	return s.GetCommittedState(db, key)
 }
@@ -207,12 +221,18 @@ func (s *stateObject) GetCommittedState(db Database, key common.Hash) common.Has
 	}
 	var value common.Hash
 	if len(enc) > 0 {
+		//如果数据存在，则还需要 RLP 解码。
+		//需要解码的原因是，在将存储树更新到数据库中（updateTrie）时，有对数据进行 RLP 序列化。
+		//序列化的好处是可以压缩数据。 在区块链中，存储永远是昂贵的。每节省 1 字节，积少成多，都是有意义的。 同时在序列化前还有清理数据前面的 0 值。
+		//比如，如果数据是一个用户年龄，值 20，是会用 32 字节填充的。在写入 State 时，将为 [0,0,0,......,2]，
+		//前面有 30 个 0 字节，这些 0 值会浪费存储空间，所以存储前将清理左侧的 0 值，只存储 [2]。 不用担心取值问题，因为读取出 [2]后，也将被写入 32 字节中 ⑨
 		_, content, _, err := rlp.Split(enc)
 		if err != nil {
 			s.setError(err)
 		}
 		value.SetBytes(content)
 	}
+	//所有获取过的数据，将会缓存在 originStorage
 	s.originStorage[key] = value
 	return value
 }
@@ -262,6 +282,7 @@ func (s *stateObject) setState(key, value common.Hash) {
 
 // finalise moves all dirty storage slots into the pending area to be hashed or
 // committed later. It is invoked at the end of every transaction.
+//finalize将所有脏存储插槽移入待处理区域，以供稍后哈希或提交。在每个事务结束时调用它。
 func (s *stateObject) finalise() {
 	for key, value := range s.dirtyStorage {
 		s.pendingStorage[key] = value
@@ -339,6 +360,7 @@ func (s *stateObject) AddBalance(amount *big.Int) {
 	// clearing (0,0,0 objects) can take effect.
 	if amount.Sign() == 0 {
 		if s.empty() {
+			//如果账户为空，则将会被touch,一旦账户被 touched ，则会在 Commit 时删除
 			s.touch()
 		}
 
@@ -357,6 +379,7 @@ func (s *stateObject) SubBalance(amount *big.Int) {
 }
 
 func (s *stateObject) SetBalance(amount *big.Int) {
+	//需要增加一条变更流水到 StateDB 的 journal 中 ⑤。 添加流水的目的是方便回滚。
 	s.db.journal.append(balanceChange{
 		account: &s.address,
 		prev:    new(big.Int).Set(s.data.Balance),

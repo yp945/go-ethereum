@@ -42,12 +42,15 @@ func hexToCompact(hex []byte) []byte {
 		hex = hex[:len(hex)-1]
 	}
 	buf := make([]byte, len(hex)/2+1)
+	// 标志byte为00000000或者00100000
 	buf[0] = terminator << 5 // the flag byte
+	//如果长度为奇数，添加奇数位标志1，并把第一个nibble字节放入buf[0]的低四位
 	if len(hex)&1 == 1 {
-		buf[0] |= 1 << 4 // odd flag
-		buf[0] |= hex[0] // first nibble is contained in the first byte
+		buf[0] |= 1 << 4 // 奇数标志 00110000
+		buf[0] |= hex[0] // 第一个nibble包含在第一个字节中 0011xxxx
 		hex = hex[1:]
 	}
+	//将两个nibble字节合并成一个字节
 	decodeNibbles(hex, buf[1:])
 	return buf
 }

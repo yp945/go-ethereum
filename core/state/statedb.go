@@ -63,13 +63,13 @@ func (n *proofList) Delete(key []byte) error {
 // * Contracts
 // * Accounts
 type StateDB struct {
-	db   Database
-	trie Trie
+	db   Database      //操作状态的底层数据库，在实例化 StateDB 时指定
+	trie Trie       //世界状态所在的树实例对象，现在只有以太坊改进的默克尔前缀压缩树
 
 	// This map holds 'live' objects, which will get modified while processing a state transition.
-	stateObjects        map[common.Address]*stateObject
+	stateObjects        map[common.Address]*stateObject  //以账户地址为键的账户状态对象，能够在内存中维护使用过的账户
 	stateObjectsPending map[common.Address]struct{} // State objects finalized but not yet written to the trie
-	stateObjectsDirty   map[common.Address]struct{} // State objects modified in the current execution
+	stateObjectsDirty   map[common.Address]struct{} // 标记被修改过的账户
 
 	// DB error.
 	// State objects are used by the consensus core and VM which are
@@ -90,7 +90,7 @@ type StateDB struct {
 
 	// Journal of state modifications. This is the backbone of
 	// Snapshot and RevertToSnapshot.
-	journal        *journal
+	journal        *journal  //是修改状态的日志流水，使用此日志流水可回滚状态
 	validRevisions []revision
 	nextRevisionId int
 
@@ -107,6 +107,8 @@ type StateDB struct {
 
 // Create a new state from a given trie.
 func New(root common.Hash, db Database) (*StateDB, error) {
+	//在实例化 StateDB 时，需要立即打开含有世界状态的 Trie 树。
+	//如果 root 对应的树不存在，则会实例化失败①。实例化的 StateDB 中将记录多种信息
 	tr, err := db.OpenTrie(root)
 	if err != nil {
 		return nil, err
@@ -282,6 +284,7 @@ func (s *StateDB) GetCodeHash(addr common.Address) common.Hash {
 }
 
 // GetState retrieves a value from the given account's storage trie.
+//
 func (s *StateDB) GetState(addr common.Address, hash common.Hash) common.Hash {
 	stateObject := s.getStateObject(addr)
 	if stateObject != nil {
@@ -464,8 +467,14 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 // nil for a deleted state object, it returns the actual object with the deleted
 // flag set. This is needed by the state journal to revert to the correct s-
 // destructed object instead of wiping all knowledge about the state object.
+//getDeletedStateObject 和 getStateObject 类似， 但是当stateObject 被删除后不会返回nil
+//它会返回真实的object 但是带有删除的标记。 这个标记会被 state journal 用来回滚正确或者被删除的对象
+// 而不是 state object简单的被删除掉
 func (s *StateDB) getDeletedStateObject(addr common.Address) *stateObject {
-	// Prefer live objects if any is available
+	// 将返回指定账户的 StateObject，不存在时 nil
+	//stateObjects 这个map结构中保存着从实例化State 到当前状态
+	//所有已经访问过的stateObject, 因此，获取 StateObject 时先从 map 缓存中检查是否已打开，
+	//如果存在则返回。 如果是第一次使用，则以账户地址为 key 从树中查找读取账户状态数据
 	if obj := s.stateObjects[addr]; obj != nil {
 		return obj
 	}
@@ -480,11 +489,13 @@ func (s *StateDB) getDeletedStateObject(addr common.Address) *stateObject {
 		return nil
 	}
 	var data Account
+	//读取到的数据，是被 RLP 序列化过的，因此，在读取到数据后，还需要进行反序列化。
 	if err := rlp.DecodeBytes(enc, &data); err != nil {
 		log.Error("Failed to decode state object", "addr", addr, "err", err)
 		return nil
 	}
 	// Insert into the live set
+	//为了降低 IO 和在内存中维护可能被修改的 Account 信息，会将其组装成 StateObject存储在 State 实例中。
 	obj := newObject(s, addr, data)
 	s.setStateObject(obj)
 	return obj
@@ -658,7 +669,10 @@ func (s *StateDB) GetRefund() uint64 {
 // Finalise finalises the state by removing the s destructed objects and clears
 // the journal as well as the refunds. Finalise, however, will not push any updates
 // into the tries just yet. Only IntermediateRoot or Commit will do that.
+//Finalize通过删除销毁的对象来最终确定状态，并清除journal以及refund。
+//但是，最终确定尚不会将任何更新推送到tries中。只有IntermediateRoot或Commit才能做到这一点
 func (s *StateDB) Finalise(deleteEmptyObjects bool) {
+	//因为在修改某账户信息是，将会记录变更流水（journal），因此在提交保存修改时只需要将在流水中存在的记录作为修改集
 	for addr := range s.journal.dirties {
 		obj, exist := s.stateObjects[addr]
 		if !exist {
@@ -685,6 +699,9 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 // IntermediateRoot computes the current root hash of the state trie.
 // It is called in between transactions to get the root hash that
 // goes into transaction receipts.
+
+//IntermediateRoot 用来计算当前的state trie的root的hash值。
+//这个方法会在交易执行的过程中被调用。会被存入 transaction receipt root
 func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	// Finalise all the dirty storage states and write them into the tries
 	s.Finalise(deleteEmptyObjects)
@@ -727,6 +744,7 @@ func (s *StateDB) clearJournalAndRefund() {
 // Commit writes the state to the underlying in-memory trie database.
 func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
 	// Finalize any pending changes and merge everything into the tries
+	//完成成所有未完成的更改并将所有内容合并到tires中
 	s.IntermediateRoot(deleteEmptyObjects)
 
 	// Commit objects to the trie, measuring the elapsed time

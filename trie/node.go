@@ -44,7 +44,7 @@ type (
 		flags nodeFlag
 	}
 	hashNode  []byte  //哈希节点
-	valueNode []byte  //数据节点，但它的值就是实际的值
+	valueNode []byte  //数据节点，它的值就是实际的值
 )
 
 // nilValueNode is used when collapsing internal trie nodes for hashing, since
@@ -142,6 +142,7 @@ func decodeShort(hash, elems []byte) (node, error) {
 	}
 	flag := nodeFlag{hash: hash}
 	key := compactToHex(kbuf)
+	//通过key中是否包含结束符来区分叶子节点和扩展节点
 	if hasTerm(key) {
 		// value node
 		val, _, err := rlp.SplitString(rest)

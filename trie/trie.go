@@ -68,6 +68,7 @@ func New(root common.Hash, db *Database) (*Trie, error) {
 		db: db,
 	}
 	if root != (common.Hash{}) && root != emptyRoot {
+		//// 如果hash不是空值，从db中加载一个已经存在的树
 		rootnode, err := trie.resolveHash(root[:], nil)
 		if err != nil {
 			return nil, err
@@ -105,6 +106,7 @@ func (t *Trie) TryGet(key []byte) ([]byte, error) {
 	return value, err
 }
 
+//根据key
 func (t *Trie) tryGet(origNode node, key []byte, pos int) (value []byte, newnode node, didResolve bool, err error) {
 	switch n := (origNode).(type) {
 	case nil:
@@ -393,8 +395,10 @@ func (t *Trie) resolve(n node, prefix []byte) (node, error) {
 	return n, nil
 }
 
+//这里的trie.resolveHash就是加载整课树的方法
 func (t *Trie) resolveHash(n hashNode, prefix []byte) (node, error) {
 	hash := common.BytesToHash(n)
+	//通过hash从db中取出node的RLP编码内容
 	if node := t.db.node(hash); node != nil {
 		return node, nil
 	}
